@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import api from "@/lib/api";
+import api, { extractCsrfToken, getCsrfToken } from "@/lib/api";
 import { Client, Product, OrderItem, Order } from "@/types";
 
 export default function EditOrderPage() {
@@ -15,28 +15,44 @@ export default function EditOrderPage() {
   const [clientId, setClientId] = useState<number | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    // Buscar dados do pedido, clientes e produtos
-    Promise.all([
-      api.get(`/orders/${orderId}`),
-      api.get("/clients"),
-      api.get("/products"),
-    ])
-      .then(([orderRes, clientsRes, productsRes]) => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        // Buscar o token CSRF antes de carregar os dados (opcional, mas pode ajudar)
+        await getCsrfToken();
+
+        const [orderRes, clientsRes, productsRes] = await Promise.all([
+          api.get(`/orders/${orderId}`),
+          api.get("/clients"),
+          api.get("/products"),
+        ]);
+
         const order: Order = orderRes.data;
         setClients(clientsRes.data);
         setProducts(productsRes.data);
         setClientId(order.client.id);
-        // Mapear produtos para OrderItem com product_id, quantity e unit_price
+
         const mappedItems: OrderItem[] = order.products.map((p) => ({
           product_id: p.id,
-          quantity: p.pivot.quantity,
-          unit_price: p.pivot.unit_price,
+          quantity: Number(p.pivot.quantity),
+          unit_price: Number(p.pivot.unit_price),
         }));
+
         setItems(mappedItems);
-      })
-      .finally(() => setLoading(false));
+      } catch (err: any) {
+        console.error("Erro ao carregar dados:", err);
+        setError(err.response?.data?.message || "Erro ao carregar dados");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
   }, [orderId]);
 
   const handleAddItem = () => {
@@ -69,18 +85,37 @@ export default function EditOrderPage() {
   );
 
   const handleSubmit = async () => {
-    if (!clientId || items.length === 0)
-      return alert("Preencha todos os campos");
+    if (!clientId || items.length === 0) {
+      alert("Preencha todos os campos");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    const payload = {
+      client_id: clientId,
+      items,
+    };
 
     try {
-      await api.put(`/orders/${orderId}`, {
-        client_id: clientId,
-        items,
+      await getCsrfToken();
+      const csrfToken = extractCsrfToken();
+
+      if (!csrfToken) throw new Error("Token CSRF não encontrado.");
+
+      await api.put(`/orders/${orderId}`, payload, {
+        headers: {
+          "X-XSRF-TOKEN": csrfToken,
+        },
       });
 
-      router.push("/orders");
-    } catch (error) {
-      alert("Erro ao atualizar pedido");
+      router.push("/home");
+    } catch (err: any) {
+      console.error("Erro ao atualizar pedido:", err);
+      setError(err.response?.data?.message || "Erro ao atualizar pedido");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -108,53 +143,99 @@ export default function EditOrderPage() {
 
       <div>
         <h2 className="font-medium mb-2">Produtos</h2>
-        {items.map((item, index) => (
-          <div key={index} className="grid grid-cols-5 gap-2 mb-2 items-center">
-            <select
-              className="border p-2 rounded"
-              value={item.product_id}
-              onChange={(e) =>
-                handleChangeItem(index, "product_id", Number(e.target.value))
-              }
+        {items.map((item, index) => {
+          const selectedProduct = products.find(
+            (p) => p.id === item.product_id
+          );
+
+          return (
+            <div
+              key={index}
+              className="border p-4 mb-4 rounded-md bg-gray-50 space-y-2"
             >
-              {products.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={1}
-              value={item.quantity}
-              onChange={(e) =>
-                handleChangeItem(index, "quantity", e.target.value)
-              }
-              className="border p-2 rounded"
-              placeholder="Quantidade"
-            />
-            <input
-              type="number"
-              step="0.01"
-              min={0}
-              value={item.unit_price}
-              onChange={(e) =>
-                handleChangeItem(index, "unit_price", e.target.value)
-              }
-              className="border p-2 rounded"
-              placeholder="Preço unitário"
-            />
-            <span>R$ {(item.quantity * item.unit_price).toFixed(2)}</span>
-            <button
-              type="button"
-              onClick={() => handleRemoveItem(index)}
-              className="text-red-600 font-bold"
-              title="Remover produto"
-            >
-              ×
-            </button>
-          </div>
-        ))}
+              <div className="grid grid-cols-5 gap-2 items-center">
+                <div className="col-span-1">
+                  <label className="block text-sm font-medium mb-1">
+                    Produto
+                  </label>
+                  <select
+                    className="border p-2 rounded w-full"
+                    value={item.product_id}
+                    onChange={(e) =>
+                      handleChangeItem(
+                        index,
+                        "product_id",
+                        Number(e.target.value)
+                      )
+                    }
+                  >
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="col-span-1">
+                  <label className="block text-sm font-medium mb-1">
+                    Quantidade
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={item.quantity}
+                    onChange={(e) =>
+                      handleChangeItem(index, "quantity", e.target.value)
+                    }
+                    className="border p-2 rounded w-full"
+                    placeholder="Quantidade"
+                  />
+                </div>
+
+                <div className="col-span-1">
+                  <label className="block text-sm font-medium mb-1">
+                    Preço Unitário
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={item.unit_price}
+                    onChange={(e) =>
+                      handleChangeItem(index, "unit_price", e.target.value)
+                    }
+                    className="border p-2 rounded w-full"
+                    placeholder="Preço unitário"
+                  />
+                </div>
+
+                <div className="col-span-1">
+                  <label className="block text-sm font-medium mb-1">
+                    Total
+                  </label>
+                  <span className="block p-2 bg-white border rounded">
+                    R${" "}
+                    {(Number(item.quantity) * Number(item.unit_price)).toFixed(
+                      2
+                    )}
+                  </span>
+                </div>
+
+                <div className="col-span-1 flex items-end">
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveItem(index)}
+                    className="text-red-600 font-bold text-xl ml-2"
+                    title="Remover produto"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
 
         <button
           type="button"
