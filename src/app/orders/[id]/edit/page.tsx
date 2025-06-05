@@ -23,7 +23,7 @@ export default function EditOrderPage() {
         setLoading(true);
         setError("");
 
-        // Buscar o token CSRF antes de carregar os dados (opcional, mas pode ajudar)
+        // Buscar o token CSRF antes de carregar os dados
         await getCsrfToken();
 
         const [orderRes, clientsRes, productsRes] = await Promise.all([

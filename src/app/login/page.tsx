@@ -18,16 +18,13 @@ export default function LoginScreen() {
     setError('');
 
     try {
-      // First get CSRF token
       await getCsrfToken();
       
-      // Extract the token from cookies
       const csrfToken = extractCsrfToken();
       if (!csrfToken) {
         throw new Error('Failed to retrieve CSRF token');
       }
 
-      // Make login request with CSRF token in headers
       const response = await api.post('/login', { 
         email, 
         password 
